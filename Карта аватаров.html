@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Карта Империй: Final Edition</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; background: #000; }
+        #map { height: 100vh; width: 100%; background: #111; }
+        
+        #controls {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            z-index: 1000;
+            background: rgba(10, 10, 10, 0.85);
+            color: #eee;
+            padding: 20px;
+            border-radius: 12px;
+            width: 320px;
+            border: 1px solid #333;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+        }
+
+        h3 { 
+            margin: 0 0 15px 0; font-size: 13px; color: #e67e22; 
+            text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid #333; 
+            padding-bottom: 8px;
+        }
+
+        .control-row { margin-bottom: 15px; }
+        
+        label { display: flex; justify-content: space-between; font-size: 11px; color: #bbb; margin-bottom: 5px; }
+        span.val { color: #fff; font-weight: bold; }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: #d35400;
+            cursor: pointer;
+            height: 3px;
+            background: #444;
+            border-radius: 2px;
+        }
+
+        .legend {
+            margin-top: 15px;
+            font-size: 10px;
+            color: #777;
+            display: flex;
+            gap: 12px;
+            border-top: 1px solid #333;
+            padding-top: 10px;
+            align-items: center;
+        }
+        .dot { width: 8px; height: 8px; display: inline-block; border-radius: 50%; margin-right: 4px; }
+        
+        .stats-box { margin-left: auto; text-align: right; line-height: 1.2; }
+        .stat-main { color: #ddd; }
+        .stat-sub { color: #e74c3c; }
+
+        /* Метки */
+        .leaflet-tooltip.city-label {
+            background-color: rgba(0,0,0,0.6);
+            border: 1px solid #d35400;
+            color: #fff;
+            font-size: 10px;
+            border-radius: 3px;
+            padding: 0px 4px;
+            white-space: nowrap;
+        }
+        .leaflet-tooltip.country-label {
+            background-color: rgba(0,0,0,0.8);
+            border: 1px solid #27ae60; /* Зеленая обводка для стран */
+            color: #fff;
+            font-size: 10px;
+            border-radius: 3px;
+            padding: 0px 4px;
+            white-space: nowrap;
+            font-weight: bold;
+        }
+        .leaflet-tooltip.wild-label {
+            background-color: transparent;
+            border: none;
+            color: rgba(255,255,255,0.3);
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            box-shadow: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="controls">
+    <h3>Настройки Империй</h3>
+
+    <div class="control-row">
+        <label>Мин. население (Порог): <span id="lblThreshold" class="val">3 млн</span></label>
+        <input type="range" id="threshold" min="0.5" max="20" value="3" step="0.5">
+    </div>
+
+    <div class="control-row">
+        <label>Размер Городов/Стран: <span id="lblCityScale" class="val">740%</span></label>
+        <input type="range" id="cityScale" min="100" max="1000" value="740" step="10">
+    </div>
+
+    <div class="control-row">
+        <label>Размер Пустошей: <span id="lblWildScale" class="val">200%</span></label>
+        <input type="range" id="wildScale" min="50" max="400" value="200" step="10">
+    </div>
+
+    <div class="legend">
+        <div><span class="dot" style="background:#d35400"></span>Города</div>
+        <div><span class="dot" style="background:#27ae60"></span>Страны</div>
+        <div><span class="dot" style="background:#2980b9"></span>Пустоши</div>
+        <div class="stats-box">
+            <div id="cityStat" class="stat-main">0 актив</div>
+            <div id="absorbedStat" class="stat-sub">0 съедено</div>
+        </div>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<script>
+    // --- 1. ДАННЫЕ ГОРОДОВ ---
+    const rawCities = [
+        ["Лондон",14,51.5,-0.1], ["Париж",13,48.8,2.3], ["Мадрид",6.7,40.4,-3.7], ["Барселона",5.6,41.3,2.1],
+        ["Берлин",4.8,52.5,13.4], ["Рур",11,51.2,7.0], ["Рим",4.3,41.9,12.5], ["Милан",5,45.4,9.1],
+        ["Неаполь",3,40.8,14.2], ["Афины",3.1,37.9,23.7], ["Лиссабон",2.9,38.7,-9.1], ["Брюссель",2.5,50.8,4.3],
+        ["Амстердам",2.5,52.3,4.9], ["Гамбург",2.5,53.5,9.9], ["Мюнхен",2.6,48.1,11.5], ["Прага",2.2,50.0,14.4],
+        ["Вена",2.9,48.2,16.3], ["Будапешт",3,47.4,19.0], ["Варшава",3,52.2,21.0], ["Стокгольм",2.4,59.3,18.0],
+        ["Копенгаген",2,55.6,12.5], ["Дублин",1.4,53.3,-6.2], ["Манчестер",2.7,53.4,-2.2], ["Бирмингем",2.6,52.4,-1.9],
+        ["Лион",1.7,45.7,4.8], ["Марсель",1.6,43.2,5.3], ["Турин",1.7,45.0,7.6], ["Валенсия",1.5,39.4,-0.3],
+        ["Цюрих",1.4,47.3,8.5], ["Франкфурт",2.3,50.1,8.6], ["Осло",1.2,59.9,10.7], ["Хельсинки",1.3,60.1,24.9],
+        ["Москва",17.3,55.7,37.6], ["С-Петербург",5.6,59.9,30.3], ["Киев",3.5,50.4,30.5], ["Минск",2,53.9,27.5],
+        ["Бухарест",2.4,44.4,26.1], ["София",1.3,42.7,23.3], ["Белград",1.4,44.8,20.4], ["Харьков",1.4,49.9,36.2],
+        ["Нижний Новгород",1.2,56.3,44.0], ["Казань",1.3,55.7,49.1], ["Самара",1.2,53.2,50.1], ["Ростов-на-Дону",1.1,47.2,39.7],
+        ["Волгоград",1,48.7,44.5], ["Пермь",1,58.0,56.2], ["Воронеж",1,51.6,39.2], ["Краснодар",1,45.0,38.9],
+        ["Саратов",0.8,51.5,46.0], ["Уфа",1.1,54.7,55.9], ["Одесса",1,46.4,30.7], ["Днепр",1,48.4,35.0],
+        ["Львов",0.7,49.8,24.0], ["Рига",0.6,56.9,24.1], ["Вильнюс",0.5,54.6,25.2], ["Таллин",0.4,59.4,24.7],
+        ["Мурманск",0.3,68.9,33.0], ["Архангельск",0.3,64.5,40.5], ["Астрахань",0.5,46.3,48.0],
+        ["Екатеринбург",1.5,56.8,60.6], ["Челябинск",1.2,55.1,61.4], ["Тюмень",0.8,57.1,65.5], ["Омск",1.1,54.9,73.3],
+        ["Новосибирск",1.6,55.0,82.9], ["Красноярск",1.1,56.0,92.8], ["Иркутск",0.6,52.2,104.2], ["Хабаровск",0.6,48.4,135.0],
+        ["Владивосток",0.6,43.1,131.8], ["Якутск",0.3,62.0,129.7], ["Норильск",0.2,69.3,88.2], ["Магадан",0.1,59.5,150.8],
+        ["Ташкент",3,41.2,69.2], ["Алма-Ата",2,43.2,76.8], ["Астана",1.2,51.1,71.4], ["Бишкек",1,42.8,74.5],
+        ["Душанбе",0.9,38.5,68.7], ["Ашхабад",1,37.9,58.3], ["Баку",2.5,40.4,49.8], ["Тбилиси",1.1,41.7,44.8],
+        ["Ереван",1,40.1,44.5],
+        ["Стамбул",16,41.0,28.9], ["Анкара",5,39.9,32.8], ["Измир",3,38.4,27.1], ["Тегеран",14,35.6,51.3],
+        ["Мешхед",3,36.2,59.6], ["Исфахан",2,32.6,51.6], ["Багдад",7,33.3,44.3], ["Эр-Рияд",7,24.7,46.6],
+        ["Джидда",4.7,21.5,39.1], ["Кувейт",3,29.3,47.9], ["Дубай",3.5,25.2,55.3], ["Тель-Авив",4,32.0,34.7],
+        ["Каир",22,30.0,31.2], ["Александрия",5.5,31.2,29.9], ["Амман",4,31.9,35.9], ["Бейрут",2.4,33.8,35.5],
+        ["Дамаск",2.5,33.5,36.2], ["Касабланка",4.5,33.5,-7.6], ["Алжир",4,36.7,3.0], ["Тунис",2.7,36.8,10.1],
+        ["Триполи",1.2,32.8,13.1], ["Хартум",6,15.5,32.5], ["Сана",3,15.3,44.2],
+        ["Лагос",21,6.5,3.3], ["Киншаса",17,-4.4,15.2], ["Йоханнесбург",11,-26.2,28.0], ["Луанда",9,-8.8,13.2],
+        ["Найроби",5,-1.2,36.8], ["Дар-эс-Салам",7,-6.8,39.2], ["Аддис-Абеба",5,9.0,38.7], ["Абиджан",5.5,5.3,-4.0],
+        ["Кейптаун",4.8,-33.9,18.4], ["Дакар",3.5,14.7,-17.4], ["Аккра",2.6,5.6,-0.1], ["Кано",4,12.0,8.5],
+        ["Ибадан",3.6,7.3,3.9], ["Дуала",3,4.0,9.7], ["Кампала",3.6,0.3,32.5], ["Лусака",2.7,-15.4,28.2],
+        ["Хараре",1.5,-17.8,31.0], ["Мапуту",1.1,-25.9,32.5], ["Антананариву",3,-18.8,47.5], ["Могадишо",2.5,2.0,45.3],
+        ["Токио",37,35.6,139.6], ["Шанхай",29,31.2,121.4], ["Пекин",21,39.9,116.4], ["Дели",32,28.6,77.2],
+        ["Мумбаи",21,19.0,72.8], ["Дакка",23,23.8,90.4], ["Карачи",17,24.8,67.0], ["Осака",19,34.6,135.5],
+        ["Чунцин",17,29.5,106.5], ["Калькутта",15,22.5,88.3], ["Манила",14,14.5,120.9],
+        ["Тяньцзинь",14,39.1,117.2], ["Гуанчжоу",14,23.1,113.2], ["Шэньчжэнь",12,22.5,114.0], ["Бангалор",13,12.9,77.5],
+        ["Ченнаи",11,13.0,80.2], ["Джакарта",11,-6.2,106.8], ["Бангкок",11,13.7,100.5], ["Сеул",25,37.5,126.9],
+        ["Хайдарабад",10,17.3,78.4], ["Лахор",13,31.5,74.3], ["Ухань",9,30.5,114.3], ["Чэнду",9,30.5,104.0],
+        ["Дунгуань",8,23.0,113.7], ["Нанкин",9,32.0,118.7], ["Хошимин",9,10.8,106.6], ["Ханой",8,21.0,105.8],
+        ["Гонконг",7.5,22.3,114.1], ["Тайбэй",7,25.0,121.5], ["Куала-Лумпур",8,3.1,101.6], ["Сингапур",6,1.3,103.8],
+        ["Янгон",5,16.8,96.1], ["Пхеньян",3,39.0,125.7], ["Улан-Батор",1.5,47.9,106.9], ["Кабул",5,34.5,69.2],
+        ["Нью-Йорк",19,40.7,-74.0], ["Лос-Анджелес",12,34.0,-118.2], ["Чикаго",9,41.8,-87.6], ["Торонто",6.5,43.6,-79.3],
+        ["Хьюстон",6,29.7,-95.3], ["Даллас",6,32.7,-96.8], ["Майами",6.2,25.7,-80.1], ["Атланта",5,33.7,-84.3],
+        ["Филадельфия",6,39.9,-75.1], ["Вашингтон",6,38.9,-77.0], ["Бостон",4.8,42.3,-71.0], ["Финикс",4.9,33.4,-112.0],
+        ["Сан-Франциско",4.7,37.7,-122.4], ["Сиэтл",4,47.6,-122.3], ["Детройт",4.3,42.3,-83.0], ["Монреаль",4,45.5,-73.5],
+        ["Ванкувер",2.6,49.2,-123.1], ["Мехико",22,19.4,-99.1], ["Сан-Паулу",22,-23.5,-46.6], ["Буэнос-Айрес",15,-34.6,-58.3],
+        ["Рио",13,-22.9,-43.1], ["Богота",11,4.7,-74.0], ["Лима",11,-12.0,-77.0], ["Сантьяго",7,-33.4,-70.6],
+        ["Каракас",3,10.4,-66.9], ["Гвадалахара",5,20.6,-103.3], ["Монтеррей",5,25.6,-100.3], ["Медельин",4,6.2,-75.5],
+        ["Белу-Оризонти",6,-19.9,-43.9], ["Бразилиа",4.7,-15.7,-47.9], ["Манаус",2.2,-3.1,-60.0], ["Ресифи",4,-8.0,-34.8],
+        ["Кито",3,-0.1,-78.4], ["Ла-Пас",1.8,-16.5,-68.1], ["Асунсьон",2.2,-25.2,-57.5], ["Монтевидео",1.7,-34.9,-56.1],
+        ["Сидней",5,-33.8,151.2], ["Мельбурн",5,-37.8,144.9], ["Брисбен",2.5,-27.4,153.0], ["Перт",2,-31.9,115.8],
+        ["Окленд",1.6,-36.8,174.7]
+    ];
+    const citiesData = rawCities.map(c => ({ n: c[0], p: c[1], lat: c[2], lon: c[3] }));
+
+    // --- 2. БАЗА СТРАН (FALLBACK) ---
+    // [Имя страны, Полное население, Столица(для проверки), Шир, Дол]
+    const countriesDb = [
+        {n:"Грузия", p:3.7, cap:"Тбилиси", lat:41.7, lon:44.8},
+        {n:"Армения", p:2.8, cap:"Ереван", lat:40.1, lon:44.5},
+        {n:"Азербайджан", p:10, cap:"Баку", lat:40.4, lon:49.8},
+        {n:"Литва", p:2.8, cap:"Вильнюс", lat:54.6, lon:25.2},
+        {n:"Латвия", p:1.9, cap:"Рига", lat:56.9, lon:24.1},
+        {n:"Эстония", p:1.3, cap:"Таллин", lat:59.4, lon:24.7},
+        {n:"Молдова", p:2.6, cap:"Кишинев", lat:47.0, lon:28.8},
+        {n:"Беларусь", p:9.2, cap:"Минск", lat:53.9, lon:27.5},
+        {n:"Финляндия", p:5.5, cap:"Хельсинки", lat:60.1, lon:24.9},
+        {n:"Норвегия", p:5.4, cap:"Осло", lat:59.9, lon:10.7},
+        {n:"Ирландия", p:5, cap:"Дублин", lat:53.3, lon:-6.2},
+        {n:"Португалия", p:10, cap:"Лиссабон", lat:38.7, lon:-9.1},
+        {n:"Греция", p:10.4, cap:"Афины", lat:37.9, lon:23.7},
+        {n:"Сербия", p:6.9, cap:"Белград", lat:44.8, lon:20.4},
+        {n:"Болгария", p:6.5, cap:"София", lat:42.7, lon:23.3},
+        {n:"Австрия", p:9, cap:"Вена", lat:48.2, lon:16.3},
+        {n:"Швейцария", p:8.7, cap:"Цюрих", lat:47.3, lon:8.5}, // Цюрих как прокси
+        {n:"Чехия", p:10.5, cap:"Прага", lat:50.0, lon:14.4},
+        {n:"Венгрия", p:9.7, cap:"Будапешт", lat:47.4, lon:19.0},
+        {n:"Казахстан", p:19, cap:"Астана", lat:51.1, lon:71.4},
+        {n:"Узбекистан", p:35, cap:"Ташкент", lat:41.2, lon:69.2},
+        {n:"Туркменистан", p:6, cap:"Ашхабад", lat:37.9, lon:58.3},
+        {n:"Кыргызстан", p:6.6, cap:"Бишкек", lat:42.8, lon:74.5},
+        {n:"Таджикистан", p:9.5, cap:"Душанбе", lat:38.5, lon:68.7},
+        {n:"Монголия", p:3.3, cap:"Улан-Батор", lat:47.9, lon:106.9}
+    ];
+
+    // --- 3. ФИЛЛЕРЫ ---
+    const wildData = [
+        {n:"Сев. Атлантика", lat:50, lon:-25}, {n:"Юж. Атлантика", lat:-20, lon:-15},
+        {n:"Индийский Ок.", lat:-15, lon:75}, {n:"Тихий (С)", lat:35, lon:-150},
+        {n:"Тихий (Ю)", lat:-25, lon:-120}, {n:"Филиппинское м.", lat:18, lon:133},
+        {n:"Южный океан", lat:-55, lon:0}, {n:"Сев. Ледовитый", lat:80, lon:0},
+        {n:"Сибирь (Зап)", lat:60, lon:70}, {n:"Сибирь (Центр)", lat:64, lon:100},
+        {n:"Сибирь (Вост)", lat:62, lon:140}, {n:"Чукотка", lat:66, lon:170},
+        {n:"Гоби", lat:44, lon:105}, {n:"Тибет", lat:32, lon:85},
+        {n:"Руб-эль-Хали", lat:20, lon:50}, {n:"Степи КЗ", lat:48, lon:65},
+        {n:"Сев. море", lat:56, lon:3}, {n:"Балтика", lat:57, lon:19},
+        {n:"Альпы", lat:46.5, lon:10}, {n:"Карпаты", lat:47, lon:23},
+        {n:"Черное море", lat:43, lon:34}, {n:"Бискай", lat:45, lon:-4},
+        {n:"Средиземное м", lat:35, lon:18}, {n:"Лапландия", lat:66, lon:20},
+        {n:"Сахара (Зап)", lat:23, lon:-12}, {n:"Сахара (Центр)", lat:23, lon:12},
+        {n:"Ливия", lat:25, lon:25}, {n:"Сахель", lat:14, lon:18},
+        {n:"Конго", lat:-1, lon:22}, {n:"Намиб", lat:-22, lon:17},
+        {n:"Сомали", lat:6, lon:47},
+        {n:"Канада (Сев)", lat:58, lon:-95}, {n:"Гренландия", lat:72, lon:-40},
+        {n:"Аляска", lat:64, lon:-150}, {n:"Скалистые", lat:44, lon:-110},
+        {n:"Амазонка", lat:-5, lon:-63}, {n:"Анды", lat:-15, lon:-72},
+        {n:"Патагония", lat:-45, lon:-68}, {n:"Австралия (Центр)", lat:-25, lon:130}
+    ];
+
+    const map = L.map('map', { center: [30, 10], zoom: 3, minZoom: 2, worldCopyJump: true, preferCanvas: true });
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', { attribution: '&copy; CARTO', subdomains: 'abcd', maxZoom: 18 }).addTo(map);
+
+    let layers = [];
+
+    // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+    function getIntersectionArea(r1, r2, d) {
+        if (d >= r1 + r2) return 0;
+        if (d <= Math.abs(r2 - r1)) return Math.PI * Math.min(r1, r2) * Math.min(r1, r2);
+        const r1Sq = r1 * r1;
+        const r2Sq = r2 * r2;
+        const alpha = Math.acos((r1Sq + d * d - r2Sq) / (2 * r1 * d));
+        const beta = Math.acos((r2Sq + d * d - r1Sq) / (2 * r2 * d));
+        return r1Sq * alpha + r2Sq * beta - 0.5 * Math.sqrt((-d + r1 + r2) * (d + r1 - r2) * (d - r1 + r2) * (d + r1 + r2));
+    }
+
+    function render() {
+        layers.forEach(l => map.removeLayer(l));
+        layers = [];
+
+        const threshold = parseFloat(document.getElementById('threshold').value);
+        const cityScale = parseInt(document.getElementById('cityScale').value) / 100;
+        const wildScale = parseInt(document.getElementById('wildScale').value) / 100;
+
+        document.getElementById('lblThreshold').innerText = threshold + " млн";
+        document.getElementById('lblCityScale').innerText = (cityScale * 100).toFixed(0) + "%";
+        document.getElementById('lblWildScale').innerText = (wildScale * 100).toFixed(0) + "%";
+
+        // --- 1. ФОРМИРОВАНИЕ СПИСКА (Города + Спасательные Круги Стран) ---
+        
+        // А. Берем города, прошедшие фильтр
+        let activeNodes = citiesData.filter(c => c.p >= threshold).map(c => ({
+            ...c, 
+            r: Math.sqrt(c.p) * 20000 * cityScale,
+            isCountry: false 
+        }));
+
+        // Создаем Set имен активных городов для быстрой проверки
+        const activeCityNames = new Set(activeNodes.map(c => c.n));
+
+        // Б. Проверяем страны: если столицы нет на карте, добавляем страну
+        countriesDb.forEach(cnt => {
+            // Если столица не активна (население города < threshold)
+            // И если население САМОЙ СТРАНЫ >= threshold (иначе это микространа, которую не надо показывать)
+            if (!activeCityNames.has(cnt.cap) && cnt.p >= threshold) {
+                activeNodes.push({
+                    n: cnt.n, // Имя страны
+                    p: cnt.p, // Население страны
+                    lat: cnt.lat,
+                    lon: cnt.lon,
+                    r: Math.sqrt(cnt.p) * 20000 * cityScale,
+                    isCountry: true // Флаг для цвета
+                });
+            }
+        });
+
+        // В. Сортировка: от больших к маленьким
+        activeNodes.sort((a, b) => b.r - a.r);
+
+        // Г. Логика поглощения ( >50% площади)
+        let absorbedCount = 0;
+        activeNodes = activeNodes.filter((small, index) => {
+            const smallArea = Math.PI * small.r * small.r;
+            for (let i = 0; i < index; i++) {
+                const big = activeNodes[i];
+                const dist = map.distance([small.lat, small.lon], [big.lat, big.lon]);
+                if (dist >= big.r + small.r) continue;
+
+                const overlapArea = getIntersectionArea(small.r, big.r, dist);
+                if (overlapArea > (smallArea * 0.5)) {
+                    absorbedCount++;
+                    return false; // Съеден
+                }
+            }
+            return true;
+        });
+
+        document.getElementById('cityStat').innerText = `${activeNodes.length} актив`;
+        document.getElementById('absorbedStat').innerText = `${absorbedCount} съедено`;
+
+        // Д. Отрисовка
+        activeNodes.forEach(c => {
+            // Если это страна - зеленый, если город - оранжевый
+            const color = c.isCountry ? '#27ae60' : '#d35400';
+            const circle = L.circle([c.lat, c.lon], {
+                color: color, fillColor: color, fillOpacity: 0.7, weight: 1, radius: c.r
+            }).addTo(map);
+            
+            if (c.r > 20000) {
+                const cssClass = c.isCountry ? "country-label" : "city-label";
+                circle.bindTooltip(`<b>${c.n}</b>`, { permanent: true, direction: "top", className: cssClass, offset: [0, -5] });
+            }
+            layers.push(circle);
+        });
+
+        // --- 2. ПУСТОШИ ---
+        let candidates = wildData.map(w => {
+            let minGap = Infinity;
+            activeNodes.forEach(c => {
+                const dist = map.distance([w.lat, w.lon], [c.lat, c.lon]);
+                const gap = dist - c.r; 
+                if (gap < minGap) minGap = gap;
+            });
+
+            const DAMPING_LIMIT = 800000;
+            const factor = DAMPING_LIMIT / (DAMPING_LIMIT + minGap);
+            let effectiveScale = 1 + (wildScale - 1) * factor;
+            let tentativeR = minGap * effectiveScale;
+            if (tentativeR > 4500000) tentativeR = 4500000;
+
+            return { ...w, r: tentativeR, originalGap: minGap };
+        });
+
+        candidates.sort((a, b) => a.r - b.r);
+
+        let placedWilds = [];
+        candidates.forEach(current => {
+            if (current.originalGap < 10000) return;
+            let finalRadius = current.r;
+
+            for (let existing of placedWilds) {
+                const dist = map.distance([current.lat, current.lon], [existing.lat, existing.lon]);
+                if (dist < finalRadius + existing.r) {
+                    let constrainedR = dist - existing.r;
+                    if (constrainedR < finalRadius) finalRadius = constrainedR;
+                }
+            }
+
+            if (finalRadius > 50000) {
+                current.r = finalRadius; 
+                placedWilds.push(current);
+                const circle = L.circle([current.lat, current.lon], {
+                    color: '#2980b9', fillColor: '#2980b9', fillOpacity: 0.35, weight: 1, radius: finalRadius
+                }).addTo(map);
+
+                if (finalRadius > 150000) {
+                    circle.bindTooltip(`${current.n}`, { permanent: true, direction: "center", className: "wild-label" });
+                }
+                layers.push(circle);
+            }
+        });
+    }
+
+    document.getElementById('threshold').addEventListener('input', render);
+    document.getElementById('cityScale').addEventListener('input', render);
+    document.getElementById('wildScale').addEventListener('input', render);
+
+    render();
+
+</script>
+</body>
+</html>
